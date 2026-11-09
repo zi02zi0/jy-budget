@@ -11,6 +11,7 @@
 - `supabase.sql` — `public.docs(user_id, path, data jsonb, updated_at)`, PK(user_id,path), RLS(auth.uid()=user_id), realtime publication.
 - `sw.js` — 네트워크 우선 앱 셸 캐시. **아이콘이나 셸 파일을 바꾸면 `CACHE` 버전(bbangji-vN)을 올릴 것.**
 - `manifest.webmanifest`, `icons/` — PWA (고양이 아이콘).
+- `tools/sync-md.ps1` — 사용자 Windows PC에서 작업 스케줄러로 30분마다 실행되어 main의 모든 `.md`를 `D:\황지영\Claude`에 덮어씀. 그러니 md 수정도 main에 푸시해야 PC 폴더에 반영됨. (UTF-8 BOM 유지할 것: Windows PowerShell 5.1이 한글을 읽으려면 필요)
 
 ## 데이터 모델 (docs 테이블의 path별 문서)
 - `tx/YYYY-MM` → `{month, items:[...]}` 거래. 금액은 부호 있음, 이체는 kind '이체'.
