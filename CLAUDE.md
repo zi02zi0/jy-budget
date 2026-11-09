@@ -11,7 +11,6 @@
 - `supabase.sql` — `public.docs(user_id, path, data jsonb, updated_at)`, PK(user_id,path), RLS(auth.uid()=user_id), realtime publication.
 - `sw.js` — 네트워크 우선 앱 셸 캐시. **아이콘이나 셸 파일을 바꾸면 `CACHE` 버전(bbangji-vN)을 올릴 것.**
 - `manifest.webmanifest`, `icons/` — PWA (고양이 아이콘).
-- `tools/sync-md.ps1` — 사용자 Windows PC에서 작업 스케줄러로 30분마다 실행되어 main의 모든 `.md`를 `D:\황지영\Claude`에 덮어씀. 그러니 md 수정도 main에 푸시해야 PC 폴더에 반영됨. (UTF-8 BOM 유지할 것: Windows PowerShell 5.1이 한글을 읽으려면 필요)
 
 ## 데이터 모델 (docs 테이블의 path별 문서)
 - `tx/YYYY-MM` → `{month, items:[...]}` 거래. 금액은 부호 있음, 이체는 kind '이체'.
@@ -23,5 +22,6 @@
 - **개인 금융 데이터(백업 JSON 등)를 저장소에 커밋하지 말 것.** 저장소는 Public.
 - 수정 후에는 로컬에서 Playwright 등으로 화면이 깨지지 않는지 확인하고, main에 커밋하면 1~2분 뒤 Pages에 반영됨.
 - **사용자 요청: 수정하면 확인(화면 테스트)한 뒤 main에 바로 커밋·푸시할 것.** 작업용 브랜치를 쓰게 되더라도 마지막엔 main에 반영.
+- 사용자가 md 파일을 달라고 하면 파일로 직접 전달할 것(사용자가 `D:\황지영\Claude` 폴더에 직접 저장함). 자동 동기화는 원하지 않음.
 - 모바일(아이폰 홈 화면 앱)과 PC 둘 다 쓰므로 두 화면 모두 확인.
 - 인라인 코드에 `//` 주석을 줄 중간에 넣지 말 것(과거에 코드가 한 줄로 이어져 깨진 적 있음). `/* */` 사용.
