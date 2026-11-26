@@ -487,8 +487,24 @@ const CURS=[['KRW','₩','원화'],['USD','$','달러'],['JPY','¥','엔'],['EUR
 const FX_DEFAULT={USD:1400,JPY:9.5,EUR:1500,CNY:195,GBP:1800};
 const curSym=c=>(CURS.find(x=>x[0]===c)||[0,c])[1];
 const fmtFx=(c,v)=>curSym(c)+(+v).toLocaleString('en-US',{maximumFractionDigits:2});
-function fxRate(cur,excludeId){ let best=null; for(const t of allTx()){ if(t.cur===cur && +t.fx>0 && t.amt && t.id!==excludeId && (!best || t.date>best.date || (t.date===best.date&&(t.ts||0)>(best.ts||0)))) best=t; }
-  return best? Math.abs(best.amt)/(+best.fx) : (+S.settings.fx?.[cur] || FX_DEFAULT[cur] || 1); }
+function lastPaidRate(cur,excludeId){ let best=null; for(const t of allTx()){ if(t.cur===cur && +t.fx>0 && t.amt && t.id!==excludeId && (!best || t.date>best.date || (t.date===best.date&&(t.ts||0)>(best.ts||0)))) best=t; }
+  return best? Math.abs(best.amt)/(+best.fx) : 0; }
+/* 오늘 환율: 인터넷에서 받아 이 기기에 6시간 저장. 못 받으면 지난 결제 환율을 써요 */
+let LIVE_FX=null; try{ const v=JSON.parse(localStorage.getItem('gb.fx')||'null'); if(v&&v.rates) LIVE_FX=v; }catch(_){}
+const liveRate=cur=> +(LIVE_FX?.rates?.[cur])>0 ? +LIVE_FX.rates[cur] : 0;
+async function loadLiveFx(){
+  if(LIVE_FX && Date.now()-(LIVE_FX.at||0) < 6*3600e3) return;
+  const want=CURS.map(c=>c[0]).filter(c=>c!=='KRW'), get=async u=>{ const r=await fetch(u,{cache:'no-store'}); if(!r.ok) throw new Error(r.status); return r.json(); };
+  let rates=null, date='';
+  try{ const d=await get('https://open.er-api.com/v6/latest/KRW'); if(d.result==='success'&&d.rates){ rates={}; for(const c of want) if(+d.rates[c]>0) rates[c]=1/d.rates[c]; date=new Date((d.time_last_update_unix||0)*1000).toISOString().slice(0,10); } }catch(_){}
+  if(!rates) try{ const d=await get('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/krw.json'); if(d.krw){ rates={}; for(const c of want){ const x=+d.krw[c.toLowerCase()]; if(x>0) rates[c]=1/x; } date=d.date||''; } }catch(_){}
+  if(!rates||!Object.keys(rates).length) return;
+  LIVE_FX={rates,date,at:Date.now()}; try{ localStorage.setItem('gb.fx',JSON.stringify(LIVE_FX)); }catch(_){}
+  render();
+}
+function fxRate(cur,excludeId){ return liveRate(cur) || lastPaidRate(cur,excludeId) || (+S.settings.fx?.[cur] || FX_DEFAULT[cur] || 1); }
+const rtAmt=r=> r.cur&&+r.fx>0 ? (r.amt<0?-1:1)*Math.round(r.fx*fxRate(r.cur)) : r.amt;
+const fxBasis=cur=> liveRate(cur)? `오늘 환율 기준${LIVE_FX.date?' · '+(+LIVE_FX.date.slice(5,7))+'/'+(+LIVE_FX.date.slice(8,10)):''}` : '지난 결제 환율 기준';
 const rateTxt=r=> r>=100? Math.round(r*10)/10 : Math.round(r*100)/100;
 const fxRow=(px,cur,fx,rate)=>`<div class="prop" id="${px}-fxrow"><label for="${px}-cur"><span class="pi">💱</span>통화</label><div class="fx-in"><select id="${px}-cur">${CURS.map(([c,sy,nm])=>`<option value="${c}" ${c===(cur||'KRW')?'selected':''}>${sy} ${nm}</option>`).join('')}</select>
   <span class="fx-more" ${cur&&cur!=='KRW'?'':'hidden'}><input id="${px}-fx" class="num" inputmode="decimal" value="${fx||''}" placeholder="외화 금액"><span class="faint">×</span><input id="${px}-rate" class="num" inputmode="decimal" value="${rate?rateTxt(rate):''}" placeholder="환율"><span class="faint">원</span></span></div></div>`;
@@ -507,7 +523,7 @@ function routineDrafts(ym){
     if(mtx.some(t=>(t.rid===r.id && t.rym===ym) || normName(t.name)===normName(r.name))) continue;
     const day=bizDay(ym,Math.min(+r.day||1,daysIn(ym)),r.biz);
     let amt=r.amt, cmemo=''; if(r.vary){ const l=latestOf(r,ym); if(l) amt=l.amt; }
-    if(r.cur && +r.fx>0){ const rate=fxRate(r.cur); amt=(r.amt<0?-1:1)*Math.round(r.fx*rate); cmemo=`${fmtFx(r.cur,r.fx)} (${curSym(r.cur)}1 = ${rateTxt(rate).toLocaleString('ko-KR')}원, 지난 결제 환율 기준)`; }
+    if(r.cur && +r.fx>0){ const rate=fxRate(r.cur); amt=(r.amt<0?-1:1)*Math.round(r.fx*rate); cmemo=`${fmtFx(r.cur,r.fx)} (${curSym(r.cur)}1 = ${rateTxt(rate).toLocaleString('ko-KR')}원, ${fxBasis(r.cur)})`; }
     if(r.kind==='이체'){ const tw=walById(r.to); if(walKind(tw)==='card'){ const cur=ymOf(todayStr());
       // 카드대금 초안 = 결제달 바로 전 달에 그 카드로 쓴 금액 (이번 달 결제는 남은 결제 예정액, 다음 달 결제는 이번 달 지금까지 쓴 누적액)
       if(ym===cur){ const inf=cardInfo(tw); if(inf.due>0){ amt=-inf.due; cmemo=`${+addMonths(ym,-1).slice(5)}월 사용분 결제 예정액`; } else { const u=cardUse(tw,addMonths(ym,-1)); if(u>0) amt=-u; } }
@@ -588,6 +604,7 @@ const saveMonths=ks=>Promise.all([...ks].map(k=>saveMonth(k).catch(()=>{})));
 const saveMeta=(name,obj)=>writeDoc('meta/'+name,obj);
 
 async function boot(){
+  loadLiveFx(); setInterval(loadLiveFx,3600e3);
   const db = window.claude?.use ? await window.claude.use('db') : null;
   if(!db){ $('#boot').innerHTML='이 화면에서는 가계부 저장소에 연결할 수 없어요.<br>claude.ai에 로그인한 상태에서 이 페이지를 열어 주세요.'; return; }
   S.db=db;
@@ -1005,14 +1022,14 @@ function vRoutine(){
   const cur=ymOf(todayStr()); const pend=new Set(routineDrafts(S.ym).map(d=>d.rid));
   const mtx=S.months[S.ym]||[]; const doneIn=r=>mtx.some(t=>(t.rid===r.id&&t.rym===S.ym)||normName(t.name)===normName(r.name));
   const status=r=> (r.freq==='year' && +S.ym.slice(5)!==(+r.month||1))?`<span class="tag t-gray">${r.month||1}월 결제</span>`: doneIn(r)?'<span class="tag t-green">입력 완료</span>': r.end&&r.end<S.ym?'<span class="tag t-gray">끝남</span>': r.paused?'<span class="tag t-gray">멈춤</span>': (r.start&&S.ym<r.start)?'<span class="tag t-gray">기록 없음</span>': (r.skips||[]).includes(S.ym)?'<span class="tag t-yellow">건너뜀</span>': pend.has(r.id)?'<span class="tag t-orange">확인 대기</span>':'<span class="tag t-green">입력 완료</span>';
-  const act=S.routines.filter(r=>!r.paused&&!(r.end&&r.end<cur)&&!(r.kind!=='이체'&&isGroupW(r.wallet))); const mAmt=r=>r.freq==='year'? r.amt/12 : r.amt; // 연 결제는 한 달치로 나눠서
+  const act=S.routines.filter(r=>!r.paused&&!(r.end&&r.end<cur)&&!(r.kind!=='이체'&&isGroupW(r.wallet))); const mAmt=r=>r.freq==='year'? rtAmt(r)/12 : rtAmt(r); // 연 결제는 한 달치로 나눠서
   const out=Math.round(act.filter(r=>r.kind!=='이체'&&r.amt<0).reduce((a,r)=>a-mAmt(r),0)), inn=Math.round(act.filter(r=>r.kind!=='이체'&&r.amt>0).reduce((a,r)=>a+mAmt(r),0)), xf=Math.round(act.filter(r=>r.kind==='이체').reduce((a,r)=>a-mAmt(r),0));
-  const row=r=>{const c=catById(r.cat); return `<tr class="click" data-rt="${r.id}" ${S.writable?`draggable="true" data-ro="rt:${r.id}"`:''}><td>${S.writable?grip:''}</td><td class="ttl">${esc(r.name)}</td><td class="r num">${r.freq==='year'?`매년 ${r.month||1}/${r.day}`:`${r.day}일`}</td><td class="r num">${won(r.amt)}${r.vary?' <span class="badge">변동</span>':''}</td><td>${r.kind==='이체'?'<span class="tag t-gray">⇄ 이체</span>':catTag(c)}</td><td class="muted">${r.kind==='이체'?`${esc(walById(r.wallet)?.name||'미지정')} → ${esc(walById(r.to)?.name||'미지정')}`:esc(walById(r.wallet)?.name||'')}</td><td>${status(r)}</td><td class="muted num">${esc((r.start||'').replace('-','.'))} ~ ${r.end?esc(r.end.replace('-','.')):''}</td></tr>`;};
+  const row=r=>{const c=catById(r.cat); return `<tr class="click" data-rt="${r.id}" ${S.writable?`draggable="true" data-ro="rt:${r.id}"`:''}><td>${S.writable?grip:''}</td><td class="ttl">${esc(r.name)}</td><td class="r num">${r.freq==='year'?`매년 ${r.month||1}/${r.day}`:`${r.day}일`}</td><td class="r num">${r.cur&&+r.fx>0?`<span class="badge" title="외화 결제 · ${fxBasis(r.cur)}">${fmtFx(r.cur,r.fx)}</span> ${won(rtAmt(r))}`:won(r.amt)}${r.vary?' <span class="badge">변동</span>':''}</td><td>${r.kind==='이체'?'<span class="tag t-gray">⇄ 이체</span>':catTag(c)}</td><td class="muted">${r.kind==='이체'?`${esc(walById(r.wallet)?.name||'미지정')} → ${esc(walById(r.to)?.name||'미지정')}`:esc(walById(r.wallet)?.name||'')}</td><td>${status(r)}</td><td class="muted num">${esc((r.start||'').replace('-','.'))} ~ ${r.end?esc(r.end.replace('-','.')):''}</td></tr>`;};
   return `<section><div class="blk-h"><h2 class="blk"><span class="emo">↻</span>ROUTINE</h2><span class="faint" style="font-size:12.5px">매달 정해진 날 연한 초안으로 캘린더에 나타나요 · 왼쪽 ⋮⋮을 끌어서 순서와 묶음을 바꿔요</span></div>
   <div class="gallery" style="margin-bottom:14px"><div class="gcard"><div class="lb">매달 나가는 돈</div><div class="v num">${won(out)}</div><div class="s"><span>지출 · 저축 루틴</span><span class="num">연 ${won(out*12)}</span></div></div><div class="gcard"><div class="lb">매달 이체</div><div class="v num c-move">${won(xf)}</div><div class="s"><span>카드 대금 · 내 통장끼리</span></div></div><div class="gcard"><div class="lb">매달 들어오는 돈</div><div class="v num c-inc">${won(inn)}</div><div class="s"><span>수입 루틴</span></div></div></div>
   <div class="pending">${ymLabel(S.ym)} · 루틴 ${S.routines.length}개 중 <b>확인 대기 ${pend.size}건</b></div>
   <div class="tbl"><table class="rt-tbl"><thead><tr><th style="width:28px"></th><th><span class="ic">Aa</span>이름</th><th class="r"><span class="ic">◷</span>매달</th><th class="r"><span class="ic">#</span>금액</th><th><span class="ic">↗</span>카테고리</th><th><span class="ic">↗</span>지갑</th><th><span class="ic">▾</span>${+S.ym.slice(5)}월</th><th><span class="ic">◷</span>기간</th></tr></thead>
-  ${grouped('rt').map(([g,rs])=>{ const sum=rs.reduce((a,r)=>a+Math.abs(r.amt),0); return `<tbody class="rog" data-rog="rt:${esc(g)}"><tr class="grp-row"><td colspan="8">${esc(g)} <span class="faint">${rs.length}</span><span class="faint num" style="float:right">${won(sum)}</span></td></tr>${rs.map(row).join('')}</tbody>`; }).join('')||'<tbody><tr><td colspan="8" class="muted">아직 루틴이 없어요.</td></tr></tbody>'}
+  ${grouped('rt').map(([g,rs])=>{ const sum=rs.reduce((a,r)=>a+Math.abs(rtAmt(r)),0); return `<tbody class="rog" data-rog="rt:${esc(g)}"><tr class="grp-row"><td colspan="8">${esc(g)} <span class="faint">${rs.length}</span><span class="faint num" style="float:right">${won(sum)}</span></td></tr>${rs.map(row).join('')}</tbody>`; }).join('')||'<tbody><tr><td colspan="8" class="muted">아직 루틴이 없어요.</td></tr></tbody>'}
   <tfoot><tr><td></td><td>개수<b>${S.routines.length}</b></td><td></td><td></td><td></td><td></td><td></td><td></td></tr></tfoot></table></div>
   ${S.writable?`<button class="addrow" id="addRt">＋ 루틴 추가</button>`:''}</section>`;
 }
