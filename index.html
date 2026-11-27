@@ -571,7 +571,7 @@ const walBal=w=>walInfo(w).bal;
 const isInv=w=>!!w && walGroup(w)==='투자' && !w.closed;
 /* 종목별 기록: holdings=[{id,name,cost(매수금액),value(평가금액),upd}] · 예수금은 직접 적거나(cash) 비우면 넣은 돈 − 매수금액 합으로 자동 */
 function holdSum(w){ const hs=w.holdings||[]; const cost=hs.reduce((a,h)=>a+(+h.cost||0),0), value=hs.reduce((a,h)=>a+(+h.value||0),0);
-  let cash=w.cash; if(cash==null){ const save=w.holdings; w.holdings=null; const i=invInfoRaw(w); w.holdings=save; cash=Math.max(0,(i?i.principal:0)-cost); }
+  let cash=w.cash; if(cash==null){ const save=w.holdings; w.holdings=null; const i=invInfoRaw(w); w.holdings=save; cash=Math.max(0,(i?i.principal+i.flow:0)-cost); }
   const upd=hs.map(h=>h.upd||'').sort().pop()||''; return {cost,value,cash:+cash||0,upd}; }
 function invInfo(w){ const r=invInfoRaw(w); if(r && w.holdings?.length){ const h=holdSum(w); r.value=h.value+h.cash; r.gain=r.value-r.principal; r.pct=r.principal>0? r.gain/r.principal*100 : null; r.asOf=h.upd||r.asOf; r.hs=w.holdings; r.cash=h.cash; } return r; }
 function invInfoRaw(w){
@@ -579,8 +579,12 @@ function invInfoRaw(w){
   const from=w.invFrom||w.baseDate||'', fts=w.invTs??w.baseTs??0;
   let p=w.invPrincipal!=null? w.invPrincipal : (w.balance||0);
   const after=t=> !from || t.date>from || (t.date===from && (t.ts||0)>fts);
-  for(const t of allTx()){ if(!isX(t) || t.date>todayStr() || !after(t)) continue; if(t.to===w.id) p+=Math.abs(t.amt); else if(t.wallet===w.id) p-=Math.abs(t.amt); }
-  const gain=bal-p; return {principal:p, value:bal, gain, pct: p>0? gain/p*100 : null, asOf: w.checked||w.baseDate||''};
+  let div=0, flow=0;
+  for(const t of allTx()){ if(t.date>todayStr()) continue;
+    if(!isX(t)){ if(t.wallet===w.id){ if(t.amt>0) div+=t.amt; if(after(t)) flow+=t.amt; } continue; }
+    if(!after(t)) continue; if(t.to===w.id) p+=Math.abs(t.amt); else if(t.wallet===w.id) p-=Math.abs(t.amt); }
+  /* div: 이 계좌로 받은 배당·이자 같은 수입 합계 · flow: 기준 시점 뒤 이 계좌의 수입−지출(예수금 자동 계산에 더해요) */
+  const gain=bal-p; return {principal:p, value:bal, gain, pct: p>0? gain/p*100 : null, asOf: w.checked||w.baseDate||'', div, flow};
 }
 /* 투자 지갑은 잔액을 다시 맞춰도 원금 기준이 흔들리지 않게, 처음 한 번 원금 기준을 고정해 둬요 */
 function freezeInv(w){ if(isInv(w) && w.invPrincipal==null){ const i=invInfo(w); if(i){ w.invPrincipal=i.principal; w.invFrom=todayStr(); w.invTs=Date.now(); } } return w; }
@@ -735,11 +739,12 @@ function carBlock(){
 }
 function invBlock(){
   const ws=S.wallets.filter(isInv).map(w=>({w,i:invInfo(w)})).filter(x=>x.i); if(!ws.length) return '';
-  const P=ws.reduce((a,x)=>a+x.i.principal,0), V=ws.reduce((a,x)=>a+x.i.value,0), G=V-P;
+  const D=ws.reduce((a,x)=>a+(x.i.div||0),0), P=ws.reduce((a,x)=>a+x.i.principal,0), V=ws.reduce((a,x)=>a+x.i.value,0), G=V-P;
   return `<section><div class="blk-h"><h2 class="blk"><span class="emo">📈</span>INVESTMENT</h2><span class="faint" style="font-size:12.5px">카드를 눌러 종목별 평가금액을 갱신해요</span></div>
   <div class="gallery">
-    <div class="gcard"><div class="lb">투자 전체</div><div class="v num">${won(V)}</div><div class="s"><span>넣은 돈</span><span class="num">${won(P)}</span></div><div class="s"><span>수익</span><span class="num ${gainCls(G)}">${gainTxt(G,P>0?G/P*100:null)}</span></div></div>
+    <div class="gcard"><div class="lb">투자 전체</div><div class="v num">${won(V)}</div><div class="s"><span>넣은 돈</span><span class="num">${won(P)}</span></div><div class="s"><span>수익</span><span class="num ${gainCls(G)}">${gainTxt(G,P>0?G/P*100:null)}</span></div>${D>0?`<div class="s faint"><span>받은 배당·이자</span><span class="num">${won(D)}</span></div>`:''}</div>
     ${ws.map(({w,i})=>`<button class="gcard" data-invest="${w.id}"><div class="lb">${esc(w.name)}</div><div class="v num">${won(i.value)}</div><div class="s"><span>넣은 돈</span><span class="num">${won(i.principal)}</span></div><div class="s"><span>수익</span><span class="num ${gainCls(i.gain)}">${gainTxt(i.gain,i.pct)}</span></div>
+      ${i.div>0?`<div class="s faint"><span>받은 배당·이자</span><span class="num">${won(i.div)}</span></div>`:''}
       ${i.hs?`<div class="hmini">${i.hs.map(h=>{const g=h.value-h.cost; return `<div class="s"><span>${esc(h.name)}</span><span class="num ${gainCls(g)}">${h.cost>0?`${g>0?'+':g<0?'−':''}${Math.abs(g/h.cost*100).toFixed(1)}%`:''}</span></div>`;}).join('')}${i.cash?`<div class="s faint"><span>예수금</span><span class="num">${won(i.cash)}</span></div>`:''}</div>`:`<div class="s faint"><span>눌러서 종목을 추가해요</span></div>`}
       <div class="s faint"><span>${i.asOf?`${+i.asOf.slice(5,7)}/${+i.asOf.slice(8)} 평가 기준`:''}</span></div></button>`).join('')}
   </div></section>`;
